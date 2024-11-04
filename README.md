@@ -22,7 +22,10 @@ pip install matplotlib numpy
 ```
 
 ## Usage
-1. Run sym.py pdf_file_name.pdf 
+1. Run sym.py with pdf_file_name.pdf (single page of a pdf is best)
+```bash
+python sym.py drawings_page_11.pdf
+```
 2. Run plot.py to plot the vector output of the pdf
 ```bash
 python plot.py

@@ -9,7 +9,7 @@ from collections import defaultdict
 import time
 
 CONFIG = {
-    'search_radius': 100,      # Initial radius to find first path
+    'search_radius': 50,      # Initial radius to find first path
     'connection_tolerance': 1.0,  # Distance tolerance for considering points connected
     'match_tolerance': 2.0,    # Tolerance for comparing point distances in matching symbols
     'angle_tolerance': 0.2,    # Tolerance for comparing angles (in radians)
@@ -338,34 +338,85 @@ class SymbolMatcher:
         self.fig.canvas.draw_idle()
 
     def get_cluster_fingerprint(self, cluster):
-        """Create a comparable fingerprint of a cluster"""
-        # Quick characteristics that can reject non-matches
+        """Get normalized geometric representation of the cluster"""
+        # Get all points
+        all_points = [point for path in cluster 
+                    for point in self.get_path_points(path)]
+        if not all_points:
+            return None
+            
+        # Convert to numpy array for efficient computation
+        points = np.array(all_points)
+        
+        # Calculate center and normalize positions
+        center = np.mean(points, axis=0)
+        centered = points - center
+        
+        # Scale to make size-invariant
+        max_dist = np.max(np.linalg.norm(centered, axis=1))
+        if max_dist == 0:
+            return None
+        normalized = centered / max_dist
+        
+        # Sort points by angle and distance from center for consistent comparison
+        angles = np.arctan2(normalized[:, 1], normalized[:, 0])
+        distances = np.linalg.norm(normalized, axis=1)
+        sorted_indices = np.lexsort((distances, angles))
+        
         return {
             'path_count': len(cluster),
-            'command_types': frozenset(cmd['command'] 
-                                    for path in cluster 
-                                    for cmd in path['commands']),
-            'points': [point for path in cluster 
-                    for point in self.get_path_points(path)]
+            'points': normalized[sorted_indices].tolist()
         }
+
+    def clusters_match(self, fp1, fp2):
+        """Compare two cluster fingerprints"""
+        if fp1 is None or fp2 is None:
+            return False
+            
+        # Quick path count check
+        if abs(fp1['path_count'] - fp2['path_count']) > 1:
+            return False
+        
+        points1 = np.array(fp1['points'])
+        points2 = np.array(fp2['points'])
+        
+        # Allow for some point count variation
+        if abs(len(points1) - len(points2)) > max(2, min(len(points1), len(points2)) * 0.1):
+            return False
+        
+        # If point counts differ, use the smaller set
+        n_points = min(len(points1), len(points2))
+        points1 = points1[:n_points]
+        points2 = points2[:n_points]
+        
+        # Calculate point-wise distances
+        distances = np.linalg.norm(points1 - points2, axis=1)
+        
+        # Use a relative tolerance based on cluster size
+        tolerance = CONFIG['match_tolerance'] / 100  # Normalized space
+        
+        # Allow some points to be off while still considering it a match
+        max_mismatched_points = max(1, n_points // 10)  # 10% of points can be off
+        return np.sum(distances > tolerance) <= max_mismatched_points
 
     def find_matching_clusters(self, target_cluster):
         """Find clusters that match the target cluster"""
         target_fp = self.get_cluster_fingerprint(target_cluster)
-        matches = []
+        if target_fp is None:
+            return []
         
-        # Quick rejection first
+        # First pass - filter by path count
         candidates = [c for c in self.clusters 
                     if abs(len(c) - target_fp['path_count']) <= 1 and
                     c[0] not in target_cluster]  # Avoid self-match
         
         print(f"\nChecking {len(candidates)} candidates with similar path counts...")
         
+        # Detailed geometric matching
+        matches = []
         for cluster in candidates:
             fp = self.get_cluster_fingerprint(cluster)
-            if fp['command_types'] == target_fp['command_types']:
-                # Do more detailed comparison here
-                # Could check relative positions of points
+            if self.clusters_match(target_fp, fp):
                 matches.append(cluster)
         
         print(f"Found {len(matches)} matching clusters")
